@@ -219,11 +219,6 @@ class clusturing():
                 except :
                     print('e')
             clustered_Id.append(tmp)
-        for i in clustered_Id:
-            print(i)
-            print("")
-        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-        print('cId' , clustered_Id)
         self.Clu_Id = clustered_Id
     
     def show_clustered_point(self, All_point, Color_list, base_frame):
@@ -245,7 +240,6 @@ class clusturing():
 class road_manager():
     def __init__(self, Clu_coord):
         self.coord = Clu_coord 
-        print('Clu_coord', Clu_coord)
         
     def do_Regression(self):
         tmp_slope = []
@@ -263,7 +257,6 @@ class road_manager():
     def cal_line(self, frame_x, frame_y, base_frame):
         slope = self.slope
         y = self.y_coord
-        print(slope, y)
         f_x = int(frame_x)
         f_y = int(frame_y)
         for i in range(len(slope)): # x = 0, x = f_x, y= 0, y = f_y
@@ -281,8 +274,6 @@ class road_manager():
                 tmp.append([t_3, 0])
             if 0 <= t_4 <= f_x:
                 tmp.append([t_4, f_y])
-            print(len(tmp))
-            print(tmp)
             cv2.line(base_frame, tmp[0], tmp[1], (255, 255, 255), 1)
         return base_frame
 #######################################################################################################
@@ -309,7 +300,6 @@ if __name__ == '__main__':
     
     cap = cv2.VideoCapture(video_path)
     frame_x = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); frame_y = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(frame_x, frame_y)
     myroad = Traffic_Tracker()
     myroad.capture(cap)
 
@@ -333,16 +323,13 @@ if __name__ == '__main__':
     # Clusturing
     
     coord_data, Id_data = myroad.get_avg_coord()
-    print(coord_data)
 
     All_point = myroad.Allpoint
-    print("All",All_point)
     print('start clusturing')
     
     cluster = clusturing(coord_data)
     cluster.clustering_point()
     coord_data = list(i[0] for i in coord_data)
-    print('coord_data', coord_data)
     cluster.clustered_Id(coord_data, Id_data)
     cluster_frame = cluster.show_clustered_point(All_point, Color_list, myroad.baseframe)
     #cluster_frame = cv2.resize(cluster_frame, (0, 0), fx = 2, fy = 2, interpolation = cv2.INTER_LINEAR)
