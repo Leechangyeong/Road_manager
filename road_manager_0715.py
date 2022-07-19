@@ -1,5 +1,6 @@
 from datetime import datetime
 import socket
+from ssl import get_default_verify_paths
 from tkinter import N
 import cv2
 from cv2 import line
@@ -8,68 +9,21 @@ from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 import cx_Oracle
 
-global client_socket
-connect = None
-cursor = None
+def get_median(data):
+    data = sorted(data)
+    centerIndex = len(data)//2
+    return (data[centerIndex] + data[-centerIndex - 1])/2
 
-def makeDictFactory(cursor):
-    columnNames = [d[0] for d in cursor.description]
- 
-    def createRow(*args):
-        return dict(zip(columnNames, args))
-    return createRow
-
-def insert(tableName, dict):
-    if cursor is None:
-        return
-    sql = 'insert into' + tableName + '('
-    headers = ''
-    values = ''
-    i = 0
-    for key, value in dict.items():
-        headers += key
-        values += value
-        if i + 1 < len(dict):
-            headers += ','
-            values += ','
-        i += 1
-    sql += headers + ')' 'values' + '(' + 'value' + ')'
-    try:
-        cursor.execute(sql)
-        cursor.execute('commit')
-        return 0
-    except:
-        cursor.execute('rollback')
-        return 1
-        
-def select(tableName, wheresql = None):
-    if cursor is None:
-        return
-
-    sql = "select * from " + tableName
-    if wheresql is not None:
-        sql += "WHERE" + wheresql
-    try:
-        cursor.execute(sql)
-        cursor.rowfactory = makeDictFactory(cursor)
-        return cursor.fetchall()
-    except:
-        return None
+def show_frame(frame):
+    cv2.namedWindow('video_c', cv2.WINDOW_NORMAL)
+    while True:
+        cv2.imshow('video_c', frame)
+        key = cv2.waitKey(25)
+        if key == ord('q'):
+            break
+    cap.release()
+    cv2.destroyAllWindows()
     
-def init():
-    global connect
-    global cursor
-    
-    connect = cx_Oracle.connect("LANE_DETECTOR", "raontec123", "main.raontec.co.kr:22564/traf", encoding = "UTF-8")
-    cursor = connect.cursor()
-    
-def close():
-    if connect is not None:
-        try:
-            connect.close()
-        except Exception as e:
-            print(e)
-
 class Traffic_Tracker:
     
     # 기본 데이터 세팅
@@ -99,9 +53,6 @@ class Traffic_Tracker:
         jsonString = client_socket.recv(dataSize)
         self.Queue.append(jsonString)
     
-    def useDB(self, data):
-        self.Queue = data
-    
     # Queue에 저장된 패킷을 하나씩 꺼내서 Parsing 하는 과정
     def dataParsing(self):
             data = self.Queue.pop()
@@ -114,7 +65,7 @@ class Traffic_Tracker:
                                 'time' : time
                                 }
             self.key = dataId
-  
+            
     # 기울기 바탕으로 이상치 제거하고, 정상값으로 판별한 값들만 표시, 추가하는 기능 (제일 최근 데이터 기준)
     def car_tracing_point(self, color):
         Id = self.key
@@ -124,7 +75,7 @@ class Traffic_Tracker:
         if self.outlier.get(Id):
             
             #5번 연속 Outlier는 더이상 부적절 하다고 판단
-            if self.outlier[Id]['out_cnt'] < 5:
+            if self.outlier[Id]['out_cnt'] < 5 and self.dict[Id]['type'] != '3':
                  
                 # coord1 = 직전 좌표, coord2 = 현재 좌표
                 coord1 = self.bef_dict[Id]['coord']; coord2 = self.dict[Id]['coord']
@@ -135,7 +86,7 @@ class Traffic_Tracker:
                     
                     # 이상치 측정을 위해 특정 개수는 그냥 기록
                     avg_count = 20
-                    threshold_gradient = 0.8
+                    threshold_gradient = 0.4
                     if self.outlier[Id]['count'] <= avg_count:                            
                         self.outlier[Id]['gradient'] = (self.outlier[Id]['gradient'] * self.outlier[Id] ['count'] + tmp_grad) / (self.outlier[Id] ['count'] + 1)
                         self.outlier[Id]['coord_avg_x'] = (self.outlier[Id]['coord_avg_x'] * self.outlier[Id]['count'] + coord2[0]) / (self.outlier[Id]['count'] + 1)
@@ -144,7 +95,10 @@ class Traffic_Tracker:
 
                     else:
                         # 이상치 거르기
-                        if abs(tmp_grad - self.outlier[Id]['gradient']) > threshold_gradient:
+                        if abs(tmp_grad - self.outlier[Id]['gradient']) > 2:
+                            self.outlier[Id]['out_cnt'] += 5
+                        
+                        elif abs(tmp_grad - self.outlier[Id]['gradient']) > threshold_gradient:
                             cv2.line(self.frame, coord2, coord2, (0, 0, 255), 2) # 구분하려고 넣어놓은거 나중에는 삭제 해야함
                             self.outlier[Id]['out_cnt'] += 1
                             return     
@@ -168,7 +122,7 @@ class Traffic_Tracker:
         tmp_list = []
         Id_list = []
         for i in list(self.dict.keys()):
-            if self.outlier[i]['count'] > 5:    # 차량 좌표가 5개 이상 찍힌 Id만 추가하기
+            if self.outlier[i]['count'] > 10:    # 차량 좌표가 5개 이상 찍힌 Id만 추가하기
                 Id_list.append(i)
                 tmp_list.append([self.outlier[i]['coord_avg_x'], self.outlier[i]['gradient']])
         return tmp_list, Id_list
@@ -221,22 +175,60 @@ class clusturing():
             clustered_Id.append(tmp)
         self.Clu_Id = clustered_Id
     
+    def check_x_avg(self, dictA):
+        Clu = self.Clu_Id
+        x_avg = []
+        for i in range(len(Clu)):
+            tmp = []
+            for j in Clu[i]:
+                tmp.append(dictA.outlier[j]['coord_avg_x'])
+            x_avg.append(tmp)
+    
+    def del_outlier_2(self):
+        Id_data = self.Clu_Id
+        aft_Id_data = []
+        for i in range(len(Id_data)):
+            tmp = []
+            med = get_median(Id_data[i])
+            for j in Id_data[i]:
+                if abs(med - j) < 150 :
+                    tmp.append(j)
+            aft_Id_data.append(tmp)
+        self.Clu_Id = aft_Id_data
+        
     def show_clustered_point(self, All_point, Color_list, base_frame):
         clustered_point = []
+        base_frame_c = base_frame.copy()
         for i in range(len(self.Clu_Id)):
             tmp = []
             for j in All_point:
                 color = Color_list[i]
                 if j[0] in self.Clu_Id[i]:
                     tmp.append(j[1:])
-                    cv2.line(base_frame, j[1:], j[1:], color, 2)
+                    cv2.line(base_frame_c, j[1:], j[1:], color, 2)
             clustered_point.append(tmp)
-        for i in clustered_point:
-            print(i)
-            print("")
         self.Clu_pt = clustered_point
-        return base_frame
-        
+        return base_frame_c
+    
+    def del_outlier(self, base_frame, Color_list):
+        bef_data = self.Clu_pt
+        aft_data = []
+        base_frame_c = base_frame.copy()
+        for i in range(len(bef_data)):
+            color = Color_list[i]
+            x_list = list(j[0] for j in bef_data[i])
+            med = get_median(x_list)
+            print(med)
+            cv2.line(base_frame_c, [int(med), 100], [int(med), 100], (255,255,0), 5)
+            for coord in bef_data[i]:
+                tmp = []
+                if abs(coord[0] - med) < 40:
+                    tmp.append(coord)
+                    cv2.line(base_frame_c, coord , coord, color, 2)
+            aft_data.append(tmp)
+        self.No_out_coord = aft_data
+        return base_frame_c
+            
 class road_manager():
     def __init__(self, Clu_coord):
         self.coord = Clu_coord 
@@ -325,29 +317,41 @@ if __name__ == '__main__':
     coord_data, Id_data = myroad.get_avg_coord()
 
     All_point = myroad.Allpoint
+    print(len(All_point))
     print('start clusturing')
-    
+    print(coord_data)
     cluster = clusturing(coord_data)
     cluster.clustering_point()
     coord_data = list(i[0] for i in coord_data)
     cluster.clustered_Id(coord_data, Id_data)
+    
+    
+    '''
+    print('check_x')
+    cluster.check_x_avg(myroad)
+    '''
+    
     cluster_frame = cluster.show_clustered_point(All_point, Color_list, myroad.baseframe)
+    show_frame(cluster_frame)
+    
+    
+    cluster.del_outlier_2()
+    cluster_frame = cluster.show_clustered_point(All_point, Color_list, myroad.baseframe)
+    show_frame(cluster_frame)
+    
+    
+    no_outlier_frame = cluster.del_outlier(myroad.baseframe, Color_list) 
+    show_frame(no_outlier_frame)
+    
     #cluster_frame = cv2.resize(cluster_frame, (0, 0), fx = 2, fy = 2, interpolation = cv2.INTER_LINEAR)
     
     
-    cv2.namedWindow('video_c', cv2.WINDOW_NORMAL)
-    while True:
-        cv2.imshow('video_c', cluster_frame)
-        key = cv2.waitKey(25)
-        if key == ord('q'):
-            break
-    cap.release()
-    cv2.destroyAllWindows()
+
     
     ###########################################################################
     # Drawing Road
     
-    road = road_manager(cluster.Clu_pt)
+    road = road_manager(cluster.No_out_coord)
     road.do_Regression()
     
     cluster_frame = road.cal_line(frame_x, frame_y, cluster_frame)
